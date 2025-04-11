@@ -1,0 +1,203 @@
+<!doctype html>
+<html>
+  <head>
+    <title>FPS Maze - Gamepad</title>
+    <style>
+      body {
+        margin: 0;
+        overflow: hidden;
+      }
+      canvas {
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <script type="module">
+      import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.160.1/build/three.module.js"
+
+      let scene = new THREE.Scene()
+
+      // Create a yaw object for horizontal rotation
+      let yawObject = new THREE.Object3D()
+      yawObject.position.set(0, 1.6, 5)
+      scene.add(yawObject)
+
+      // Set up the camera and attach it to the yaw object
+      let camera = new THREE.PerspectiveCamera(
+        60,
+        window.innerWidth / window.innerHeight,
+        0.1,
+        1000,
+      )
+      camera.position.set(0, 0, 0)
+      yawObject.add(camera)
+
+      let renderer = new THREE.WebGLRenderer()
+      renderer.setSize(window.innerWidth, window.innerHeight)
+      renderer.shadowMap.enabled = true
+      renderer.shadowMap.type = THREE.PCFSoftShadowMap
+      document.body.appendChild(renderer.domElement)
+
+      let velocityY = 0
+      let grounded = true
+      const gravity = -0.01
+      const jumpForce = 0.25
+      const moveSpeed = 0.1
+      const turnSpeed = 0.05
+      const playerRadius = 0.5
+
+      let walls = []
+
+      function makeWall(x, z) {
+        let wall = new THREE.Mesh(
+          new THREE.BoxGeometry(2, 2, 2),
+          new THREE.MeshStandardMaterial({ color: 0x2222ff }),
+        )
+        wall.position.set(x, 1, z)
+        wall.castShadow = true
+        wall.receiveShadow = true
+        scene.add(wall)
+        walls.push(wall)
+      }
+
+      // Maze
+      makeWall(0, 0)
+      makeWall(2, 0)
+      makeWall(-2, 0)
+      makeWall(0, -2)
+      makeWall(2, -2)
+      makeWall(4, -2)
+      makeWall(4, 0)
+      makeWall(4, 2)
+      makeWall(2, 2)
+      makeWall(0, 2)
+      makeWall(-2, 2)
+
+      // Ground
+      let floor = new THREE.Mesh(
+        new THREE.PlaneGeometry(50, 50),
+        new THREE.MeshStandardMaterial({ color: 0x555555 }),
+      )
+      floor.rotation.x = -Math.PI / 2
+      floor.receiveShadow = true
+      scene.add(floor)
+
+      // Lighting
+      let ambientLight = new THREE.AmbientLight(0xffffff, 0.3)
+      scene.add(ambientLight)
+
+      let directionalLight = new THREE.DirectionalLight(0xffffff, 1)
+      directionalLight.position.set(5, 10, 7.5)
+      directionalLight.castShadow = true
+      scene.add(directionalLight)
+
+      function getGamepad() {
+        return navigator.getGamepads()[0]
+      }
+
+      function updateGamepad() {
+        let gp = getGamepad()
+        if (!gp) return
+
+        // Right stick controls view
+        yawObject.rotation.y -= gp.axes[2] * turnSpeed
+        camera.rotation.x -= gp.axes[3] * turnSpeed
+        camera.rotation.x = Math.max(
+          -Math.PI / 2,
+          Math.min(Math.PI / 2, camera.rotation.x),
+        )
+
+        // Left stick controls movement
+        let forward = gp.axes[1]
+        let strafe = gp.axes[0]
+
+        let moveDir = new THREE.Vector3()
+        let forwardVec = new THREE.Vector3(
+          Math.sin(yawObject.rotation.y),
+          0,
+          Math.cos(yawObject.rotation.y),
+        )
+        let rightVec = new THREE.Vector3()
+          .crossVectors(new THREE.Vector3(0, 1, 0), forwardVec)
+          .normalize()
+
+        moveDir.addScaledVector(forwardVec, forward * moveSpeed)
+        moveDir.addScaledVector(rightVec, strafe * moveSpeed)
+
+        tryMove(moveDir)
+
+        // Jump
+        if (gp.buttons[0].pressed && grounded) {
+          velocityY = jumpForce
+          grounded = false
+        }
+      }
+
+      function tryMove(dir) {
+        // Try moving in X direction only
+        let newPosX = yawObject.position
+          .clone()
+          .add(new THREE.Vector3(dir.x, 0, 0))
+        let playerBoxX = new THREE.Box3().setFromCenterAndSize(
+          newPosX,
+          new THREE.Vector3(1, 1.6, 1),
+        )
+
+        let blockedX = false
+        for (let wall of walls) {
+          let wallBox = new THREE.Box3().setFromObject(wall)
+          if (playerBoxX.intersectsBox(wallBox)) {
+            blockedX = true
+            break
+          }
+        }
+
+        if (!blockedX) {
+          yawObject.position.x += dir.x
+        }
+
+        // Try moving in Z direction only
+        let newPosZ = yawObject.position
+          .clone()
+          .add(new THREE.Vector3(0, 0, dir.z))
+        let playerBoxZ = new THREE.Box3().setFromCenterAndSize(
+          newPosZ,
+          new THREE.Vector3(1, 1.6, 1),
+        )
+
+        let blockedZ = false
+        for (let wall of walls) {
+          let wallBox = new THREE.Box3().setFromObject(wall)
+          if (playerBoxZ.intersectsBox(wallBox)) {
+            blockedZ = true
+            break
+          }
+        }
+
+        if (!blockedZ) {
+          yawObject.position.z += dir.z
+        }
+      }
+
+      function animate() {
+        requestAnimationFrame(animate)
+        updateGamepad()
+
+        // Gravity
+        yawObject.position.y += velocityY
+        velocityY += gravity
+
+        if (yawObject.position.y <= 1.6) {
+          yawObject.position.y = 1.6
+          velocityY = 0
+          grounded = true
+        }
+
+        renderer.render(scene, camera)
+      }
+
+      animate()
+    </script>
+  </body>
+</html>
