@@ -1,7 +1,7 @@
 <!doctype html>
 <html>
   <head>
-    <title>FPS Maze - Gamepad</title>
+    <title>FPS Maze - 1.2.0</title>
     <style>
       body {
         margin: 0;
@@ -18,19 +18,16 @@
 
       let scene = new THREE.Scene()
 
-      // Create a yaw object for horizontal rotation
       let yawObject = new THREE.Object3D()
       yawObject.position.set(0, 1.6, 5)
       scene.add(yawObject)
 
-      // Set up the camera and attach it to the yaw object
       let camera = new THREE.PerspectiveCamera(
         60,
         window.innerWidth / window.innerHeight,
         0.1,
         1000,
       )
-      camera.position.set(0, 0, 0)
       yawObject.add(camera)
 
       let renderer = new THREE.WebGLRenderer()
@@ -39,14 +36,25 @@
       renderer.shadowMap.type = THREE.PCFSoftShadowMap
       document.body.appendChild(renderer.domElement)
 
-      let velocityY = 0
-      let grounded = true
       const gravity = -0.01
       const jumpForce = 0.25
-      const moveSpeed = 0.1
+      const baseSpeed = 0.03
+      const sprintSpeed = 0.05
       const turnSpeed = 0.05
       const playerRadius = 0.5
+      const playerHeight = 1.6
+      const friction = 0.8
 
+      let velocityY = 0
+      let grounded = false
+      let sprinting = false
+      let wasSprintPressed = false
+      let targetFov = 60
+      let fovSpeed = 5
+      let lastMovementTime = Date.now()
+      let moveTimeout = 500
+
+      let moveVelocity = new THREE.Vector3()
       let walls = []
 
       function makeWall(x, z) {
@@ -61,20 +69,34 @@
         walls.push(wall)
       }
 
-      // Maze
-      makeWall(0, 0)
-      makeWall(2, 0)
-      makeWall(-2, 0)
-      makeWall(0, -2)
-      makeWall(2, -2)
-      makeWall(4, -2)
-      makeWall(4, 0)
-      makeWall(4, 2)
-      makeWall(2, 2)
-      makeWall(0, 2)
-      makeWall(-2, 2)
+      function makeWallY(x, y, z) {
+        let wall = new THREE.Mesh(
+          new THREE.BoxGeometry(2, 2, 2),
+          new THREE.MeshStandardMaterial({ color: 0x2222ff }),
+        )
+        wall.position.set(x, y + 1, z)
+        wall.castShadow = true
+        wall.receiveShadow = true
+        scene.add(wall)
+        walls.push(wall)
+      }
 
-      // Ground
+      // Sample Maze
+      ;[
+        [0, 0],
+        [2, 0],
+        [-2, 0],
+        [0, -2],
+        [2, -2],
+        [4, -2],
+        [4, 0],
+        [4, 2],
+        [2, 2],
+        [0, 2],
+        [-2, 2],
+      ].forEach(([x, z]) => makeWall(x, z))
+      makeWallY(-2, 2, 2)
+
       let floor = new THREE.Mesh(
         new THREE.PlaneGeometry(50, 50),
         new THREE.MeshStandardMaterial({ color: 0x555555 }),
@@ -83,14 +105,12 @@
       floor.receiveShadow = true
       scene.add(floor)
 
-      // Lighting
-      let ambientLight = new THREE.AmbientLight(0xffffff, 0.3)
-      scene.add(ambientLight)
+      scene.add(new THREE.AmbientLight(0xffffff, 0.3))
 
-      let directionalLight = new THREE.DirectionalLight(0xffffff, 1)
-      directionalLight.position.set(5, 10, 7.5)
-      directionalLight.castShadow = true
-      scene.add(directionalLight)
+      let light = new THREE.DirectionalLight(0xffffff, 1)
+      light.position.set(5, 10, 7.5)
+      light.castShadow = true
+      scene.add(light)
 
       function getGamepad() {
         return navigator.getGamepads()[0]
@@ -100,7 +120,16 @@
         let gp = getGamepad()
         if (!gp) return
 
-        // Right stick controls view
+        let sprintPressed = gp.buttons[10]?.pressed
+        if (sprintPressed && !wasSprintPressed) {
+          sprinting = !sprinting
+        }
+        wasSprintPressed = sprintPressed
+
+        targetFov = sprinting ? 75 : 60
+        camera.fov += (targetFov - camera.fov) * fovSpeed * 0.1
+        camera.updateProjectionMatrix()
+
         yawObject.rotation.y -= gp.axes[2] * turnSpeed
         camera.rotation.x -= gp.axes[3] * turnSpeed
         camera.rotation.x = Math.max(
@@ -108,11 +137,10 @@
           Math.min(Math.PI / 2, camera.rotation.x),
         )
 
-        // Left stick controls movement
         let forward = gp.axes[1]
         let strafe = gp.axes[0]
+        let speed = sprinting ? sprintSpeed : baseSpeed
 
-        let moveDir = new THREE.Vector3()
         let forwardVec = new THREE.Vector3(
           Math.sin(yawObject.rotation.y),
           0,
@@ -122,12 +150,13 @@
           .crossVectors(new THREE.Vector3(0, 1, 0), forwardVec)
           .normalize()
 
-        moveDir.addScaledVector(forwardVec, forward * moveSpeed)
-        moveDir.addScaledVector(rightVec, strafe * moveSpeed)
+        moveVelocity.addScaledVector(forwardVec, forward * speed)
+        moveVelocity.addScaledVector(rightVec, strafe * speed)
 
-        tryMove(moveDir)
+        if (Math.abs(forward) > 0.1 || Math.abs(strafe) > 0.1) {
+          lastMovementTime = Date.now()
+        }
 
-        // Jump
         if (gp.buttons[0].pressed && grounded) {
           velocityY = jumpForce
           grounded = false
@@ -135,64 +164,80 @@
       }
 
       function tryMove(dir) {
-        // Try moving in X direction only
-        let newPosX = yawObject.position
-          .clone()
-          .add(new THREE.Vector3(dir.x, 0, 0))
-        let playerBoxX = new THREE.Box3().setFromCenterAndSize(
-          newPosX,
-          new THREE.Vector3(1, 1.6, 1),
-        )
+        const testMove = (axis) => {
+          let newPos = yawObject.position.clone()
+          newPos[axis] += dir[axis]
 
-        let blockedX = false
+          let box = new THREE.Box3().setFromCenterAndSize(
+            newPos.clone().add(new THREE.Vector3(0, playerHeight / 2, 0)),
+            new THREE.Vector3(1, playerHeight, 1),
+          )
+
+          for (let wall of walls) {
+            let wallBox = new THREE.Box3().setFromObject(wall)
+            if (
+              box.intersectsBox(wallBox) &&
+              yawObject.position.y - playerHeight / 2 < wallBox.max.y
+            )
+              return false
+          }
+
+          yawObject.position[axis] += dir[axis]
+          return true
+        }
+
+        testMove("x")
+        testMove("z")
+      }
+
+      function handleVerticalCollision() {
+        grounded = false
+        let playerBottom = yawObject.position.y - playerHeight / 2
+
         for (let wall of walls) {
-          let wallBox = new THREE.Box3().setFromObject(wall)
-          if (playerBoxX.intersectsBox(wallBox)) {
-            blockedX = true
-            break
+          let box = new THREE.Box3().setFromObject(wall)
+          if (
+            yawObject.position.x > box.min.x - 0.5 &&
+            yawObject.position.x < box.max.x + 0.5 &&
+            yawObject.position.z > box.min.z - 0.5 &&
+            yawObject.position.z < box.max.z + 0.5
+          ) {
+            if (
+              velocityY <= 0 &&
+              playerBottom >= box.max.y - 0.05 &&
+              playerBottom + velocityY <= box.max.y
+            ) {
+              yawObject.position.y = box.max.y + playerHeight / 2
+              velocityY = 0
+              grounded = true
+              return
+            }
           }
         }
 
-        if (!blockedX) {
-          yawObject.position.x += dir.x
-        }
-
-        // Try moving in Z direction only
-        let newPosZ = yawObject.position
-          .clone()
-          .add(new THREE.Vector3(0, 0, dir.z))
-        let playerBoxZ = new THREE.Box3().setFromCenterAndSize(
-          newPosZ,
-          new THREE.Vector3(1, 1.6, 1),
-        )
-
-        let blockedZ = false
-        for (let wall of walls) {
-          let wallBox = new THREE.Box3().setFromObject(wall)
-          if (playerBoxZ.intersectsBox(wallBox)) {
-            blockedZ = true
-            break
-          }
-        }
-
-        if (!blockedZ) {
-          yawObject.position.z += dir.z
+        if (yawObject.position.y < playerHeight / 2) {
+          yawObject.position.y = playerHeight / 2
+          velocityY = 0
+          grounded = true
         }
       }
 
       function animate() {
         requestAnimationFrame(animate)
+
         updateGamepad()
 
-        // Gravity
+        if (Date.now() - lastMovementTime > moveTimeout) {
+          sprinting = false
+        }
+
         yawObject.position.y += velocityY
         velocityY += gravity
 
-        if (yawObject.position.y <= 1.6) {
-          yawObject.position.y = 1.6
-          velocityY = 0
-          grounded = true
-        }
+        moveVelocity.multiplyScalar(friction)
+        tryMove(moveVelocity)
+
+        handleVerticalCollision()
 
         renderer.render(scene, camera)
       }
