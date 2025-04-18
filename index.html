@@ -1,7 +1,7 @@
 <!doctype html>
 <html>
   <head>
-    <title>Three Game - 1.5.0</title>
+    <title>FPS Maze</title>
     <style>
       body {
         margin: 0;
@@ -29,9 +29,13 @@
       import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.160.1/build/three.module.js"
 
       const scene = new THREE.Scene()
+      
+      const textureLoader = new THREE.TextureLoader();
+			const crateTexture = textureLoader.load('crate.png');
+			const crateHeightMap = textureLoader.load('crateH.png');
 
       const yawObject = new THREE.Object3D()
-      yawObject.position.set(0, 1.6, 5)
+      yawObject.position.set(0, 1.98, 5)
       scene.add(yawObject)
 
       const camera = new THREE.PerspectiveCamera(
@@ -60,7 +64,7 @@
       let targets = []
       let projectiles = []
 
-      const playerHeight = 1.6
+      const playerHeight = 1.98
       const gravity = -0.01
       const jumpForce = 0.25
       const baseSpeed = 0.03
@@ -68,6 +72,8 @@
       const slideSpeed = 0.1
       const turnSpeed = 0.05
       const friction = 0.8
+
+      const blockSize = 1
 
       const floor = new THREE.Mesh(
         new THREE.PlaneGeometry(50, 50),
@@ -94,9 +100,9 @@
 
       scene.add(light)
 
-      function makeWall(x, y = 1, z) {
+      function makeWall(x, y = blockSize/2, z) {
         const wall = new THREE.Mesh(
-          new THREE.BoxGeometry(2, 2, 2),
+          new THREE.BoxGeometry(blockSize, blockSize, blockSize),
           new THREE.MeshStandardMaterial({ color: 0x2222ff }),
         )
         wall.position.set(x, y, z)
@@ -108,17 +114,17 @@
 
       ;[
         [0, 0],
-        [2, 0],
-        [-4, 0],
-        [0, -4],
-        [6, -6],
-        [8, -4],
-        [8, 0],
-        [8, 4],
-        [4, 4],
-        [0, 4],
-        [-2, 2],
-      ].forEach(([x, z]) => makeWall(x, 1, z))
+        [blockSize, 0],
+        [-2*blockSize, 0],
+        [0, -2*blockSize],
+        [3*blockSize, -3*blockSize],
+        [4*blockSize, -2*blockSize],
+        [4*blockSize, 0],
+        [4*blockSize, 2*blockSize],
+        [2*blockSize, 2*blockSize],
+        [0, 2*blockSize],
+        [-blockSize, blockSize],
+      ].forEach(([x, z]) => makeWall(x, blockSize/2, z))
 
       function createTarget(x, y, z) {
         const t = new THREE.Mesh(
@@ -129,28 +135,43 @@
         scene.add(t)
         targets.push(t)
       }
+      
+      function makeCrate(x, y = blockSize/2, z) {
+        // Create geometry for the crate
+        const geometry = new THREE.BoxGeometry(blockSize, blockSize, blockSize);
 
-      createTarget(4, 1.5, 4)
-      createTarget(6, 1.5, 0)
+        // Apply the texture and height map to the material
+        const material = new THREE.MeshStandardMaterial({
+          map: crateTexture,  // Texture for the cube
+          displacementMap: crateHeightMap, // Height map for the cube
+          displacementScale: 0.1, // You can adjust the scale for the height map effect
+        });
+
+        // Create the crate mesh
+        const crate = new THREE.Mesh(geometry, material);
+        crate.position.set(x, y, z);
+        crate.castShadow = true;
+        crate.receiveShadow = true;
+
+        // Add to the scene
+        scene.add(crate);
+      }
+
+      createTarget(2*blockSize, 1.5, 2*blockSize)
+      createTarget(3*blockSize, 1.5, 0)
 
       let guns = []
       let currentGunIndex = 0
 
       class Gun {
-        constructor(name, recoil, speed, color, fireRate) {
+        constructor(name, recoil, speed, color) {
           this.name = name
           this.recoil = recoil
           this.speed = speed
           this.color = color
-          this.fireRate = fireRate
-          this.lastShotTime = 0
         }
 
         shoot() {
-          const now = Date.now()
-          if (now - this.lastShotTime < this.fireRate) return
-          this.lastShotTime = now
-
           const dir = camera.getWorldDirection(new THREE.Vector3())
           const pos = camera.getWorldPosition(new THREE.Vector3()).clone()
           const geo = new THREE.SphereGeometry(0.05, 8, 8)
@@ -168,9 +189,12 @@
           }
         }
       }
+      
+      makeCrate(2 * blockSize, blockSize / 2, 2 * blockSize);
+			makeCrate(4 * blockSize, blockSize / 2, -2 * blockSize);
 
-      guns.push(new Gun("Pistol", 0.02, 0.5, 0xffffff, 300)) // 300 ms between shots
-      guns.push(new Gun("Sniper", 0.05, 1.2, 0x00ff00, 1000)) // 1s delay
+      guns.push(new Gun("Pistol", 0.02, 0.5, 0xffffff))
+      guns.push(new Gun("Sniper", 0.05, 1.2, 0x00ff00))
 
       function switchGun() {
         currentGunIndex = (currentGunIndex + 1) % guns.length
@@ -221,21 +245,12 @@
 
         yawObject.rotation.y -= xAxis * turnSpeed
         camera.rotation.x -= yAxis * turnSpeed
-        camera.rotation.x = Math.max(
-          -Math.PI / 2,
-          Math.min(Math.PI / 2, camera.rotation.x),
-        )
+        camera.rotation.x = Math.max(-Math.PI/2, Math.min(Math.PI/2, camera.rotation.x))
 
         const speed = sprinting ? sprintSpeed : baseSpeed
 
-        const forwardVec = new THREE.Vector3(
-          Math.sin(yawObject.rotation.y),
-          0,
-          Math.cos(yawObject.rotation.y),
-        )
-        const rightVec = new THREE.Vector3()
-          .crossVectors(new THREE.Vector3(0, 1, 0), forwardVec)
-          .normalize()
+        const forwardVec = new THREE.Vector3(Math.sin(yawObject.rotation.y), 0, Math.cos(yawObject.rotation.y))
+        const rightVec = new THREE.Vector3().crossVectors(new THREE.Vector3(0,1,0), forwardVec).normalize()
 
         moveVelocity.addScaledVector(forwardVec, forward * speed)
         moveVelocity.addScaledVector(rightVec, strafe * speed)
@@ -252,15 +267,12 @@
 
       function tryMove(dir) {
         const test = yawObject.position.clone().add(dir)
-        if (!isColliding(test)) {
-          yawObject.position.copy(test)
-        } else {
+        if (!isColliding(test)) yawObject.position.copy(test)
+        else {
           const slideX = new THREE.Vector3(dir.x, 0, 0)
           const slideZ = new THREE.Vector3(0, 0, dir.z)
-
           const posX = yawObject.position.clone().add(slideX)
           const posZ = yawObject.position.clone().add(slideZ)
-
           if (!isColliding(posX)) yawObject.position.copy(posX)
           else if (!isColliding(posZ)) yawObject.position.copy(posZ)
         }
@@ -268,17 +280,15 @@
 
       function isColliding(pos) {
         const box = new THREE.Box3().setFromCenterAndSize(
-          pos.clone().add(new THREE.Vector3(0, playerHeight / 2, 0)),
-          new THREE.Vector3(1, playerHeight, 1),
+          pos.clone().add(new THREE.Vector3(0, playerHeight/2, 0)),
+          new THREE.Vector3(0.8, playerHeight, 0.8)
         )
-        return walls.some((w) =>
-          box.intersectsBox(new THREE.Box3().setFromObject(w)),
-        )
+        return walls.some(w => box.intersectsBox(new THREE.Box3().setFromObject(w)))
       }
 
       function handleVerticalCollision() {
         grounded = false
-        const playerBottom = yawObject.position.y - playerHeight / 2
+        const playerBottom = yawObject.position.y - playerHeight/2
         for (let wall of walls) {
           const box = new THREE.Box3().setFromObject(wall)
           if (
@@ -292,7 +302,7 @@
               playerBottom >= box.max.y - 0.05 &&
               playerBottom + velocityY <= box.max.y
             ) {
-              yawObject.position.y = box.max.y + playerHeight / 2
+              yawObject.position.y = box.max.y + playerHeight/2
               velocityY = 0
               grounded = true
               return
@@ -300,8 +310,8 @@
           }
         }
 
-        if (yawObject.position.y < playerHeight / 2) {
-          yawObject.position.y = playerHeight / 2
+        if (yawObject.position.y < playerHeight/2) {
+          yawObject.position.y = playerHeight/2
           velocityY = 0
           grounded = true
         }
@@ -310,24 +320,13 @@
       function updateProjectiles() {
         const newList = []
         for (let p of projectiles) {
-          p.position.add(
-            p.userData.dir.clone().multiplyScalar(p.userData.speed),
-          )
-
-          const hitTarget = targets.find(
-            (t) => p.position.distanceTo(t.position) < 0.3,
-          )
-
-          const hitWall = walls.find((w) => {
-            const wallBox = new THREE.Box3().setFromObject(w)
-            return wallBox.containsPoint(p.position)
-          })
-
-          if (hitTarget) {
-            scene.remove(hitTarget)
-            targets.splice(targets.indexOf(hitTarget), 1)
+          p.position.add(p.userData.dir.clone().multiplyScalar(p.userData.speed))
+          const hit = targets.find(t => p.position.distanceTo(t.position) < 0.3)
+          if (hit) {
+            scene.remove(hit)
+            targets.splice(targets.indexOf(hit), 1)
             scene.remove(p)
-          } else if (hitWall || p.position.length() > 100) {
+          } else if (p.position.length() > 100) {
             scene.remove(p)
           } else {
             newList.push(p)
@@ -336,20 +335,23 @@
         projectiles = newList
       }
 
+      const sun = new THREE.Mesh(
+        new THREE.SphereGeometry(1, 32, 32),
+        new THREE.MeshBasicMaterial({ color: 0xffffcc, emissive: 0xffffcc })
+      )
+      sun.position.copy(light.position)
+      scene.add(sun)
+
       function animate() {
         requestAnimationFrame(animate)
         updateGamepad()
         if (Date.now() - lastMovementTime > 500) sprinting = false
-
         moveVelocity.multiplyScalar(friction)
         tryMove(moveVelocity)
-
         yawObject.position.y += velocityY
         velocityY += gravity
-
         handleVerticalCollision()
         updateProjectiles()
-
         renderer.render(scene, camera)
       }
 
